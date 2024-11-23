@@ -14,7 +14,7 @@ KALI LINUX ✅
 
 ``pip install -r requirements.txt``
 
-`` python3 wifiout.pt ``
+`` python3 wifiout.py ``
 
 
 # SCREESHOTS
