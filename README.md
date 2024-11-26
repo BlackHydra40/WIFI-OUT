@@ -24,4 +24,9 @@ KALI LINUX ✅
 ![photo_2024-11-22_19-44-59](https://github.com/user-attachments/assets/bb593d0b-4780-43e1-a9db-0db689f6165a)
 
 
+# VERSION 1.1.2024
+
+
+
 # BY MS40000
+![MdZFD631_400x400](https://github.com/user-attachments/assets/b577eea8-74ba-4ddf-9775-0abcfc73bec8)
