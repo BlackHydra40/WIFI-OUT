@@ -18,6 +18,8 @@ KALI LINUX ✅
 
 WINDOWS 10 ✅
 
+`` INSTALL NMAP WINDOWS: nmap.org/download.html ``
+
 `` cd WIFI-OUT ``
 
 ``pip install -r requirements.txt``
